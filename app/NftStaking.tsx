@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Chain = { id: string; name: string; native: string; mark: string; colour: string };
 type MediaKind = "image" | "video" | "audio" | "model" | "html" | "document" | "unknown";
@@ -23,6 +23,7 @@ type WalletNft = {
 
 type StakeAsset = WalletNft & { key: string; demo?: boolean; accent?: string };
 type Position = { id: string; asset: StakeAsset; started: string; unlocks: string; earned: number; sample?: boolean };
+type WalletPage = { items: StakeAsset[]; cursor: string | null; nextCursor: string | null; totalCount: number | null };
 
 const demoAssets: StakeAsset[] = [
   { key: "demo-612", contract: null, tokenId: "612", standard: "ERC-721", balance: "1", collection: "Malware Bytes", symbol: "BYTE", network: "PulseChain", name: "Malware Byte #612", description: null, image: null, animation: null, imageKind: "unknown", animationKind: "html", demo: true, accent: "cyan" },
@@ -51,7 +52,8 @@ function StakeMedia({ asset }: { asset: StakeAsset }) {
 }
 
 export default function NftStaking({ chain, wallet, onConnectWallet }: { chain: Chain; wallet: string; onConnectWallet: () => void }) {
-  const [walletAssets, setWalletAssets] = useState<StakeAsset[]>([]);
+  const [walletPages, setWalletPages] = useState<WalletPage[]>([]);
+  const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -66,26 +68,45 @@ export default function NftStaking({ chain, wallet, onConnectWallet }: { chain: 
   ]);
   const request = useRef(0);
 
-  useEffect(() => {
-    setSelected([]);
-    setCollection("all");
-    if (!wallet) {
-      setWalletAssets([]);
-      setError("");
-      return;
-    }
+  const currentPage = walletPages[pageIndex] || null;
+  const walletAssets = currentPage?.items || [];
+  const pageTotal = currentPage?.totalCount ?? walletPages[0]?.totalCount ?? null;
+
+  const loadWalletPage = useCallback(async (cursor: string | null, reset = false) => {
+    if (!wallet) return;
     const requestId = ++request.current;
     setLoading(true);
     setError("");
-    fetch(`/api/wallet-nfts?wallet=${encodeURIComponent(wallet)}&chainId=${encodeURIComponent(chain.id)}`)
-      .then(async (response) => {
-        const data = await response.json() as { items?: WalletNft[]; error?: string };
-        if (!response.ok) throw new Error(data.error || "Unable to load wallet NFTs.");
-        if (requestId === request.current) setWalletAssets((data.items || []).map((item) => ({ ...item, key: assetKey(item) })));
-      })
-      .catch((cause) => { if (requestId === request.current) setError(cause instanceof Error ? cause.message : "Unable to load wallet NFTs."); })
-      .finally(() => { if (requestId === request.current) setLoading(false); });
-  }, [chain.id, refreshNonce, wallet]);
+    try {
+      const params = new URLSearchParams({ wallet, chainId: chain.id });
+      if (cursor) params.set("cursor", cursor);
+      const response = await fetch("/api/wallet-nfts?" + params.toString());
+      const data = await response.json() as { items?: WalletNft[]; nextCursor?: string | null; totalCount?: number | null; error?: string };
+      if (!response.ok) throw new Error(data.error || "Unable to load wallet NFTs.");
+      if (requestId !== request.current) return;
+      const page: WalletPage = { items: (data.items || []).map((item) => ({ ...item, key: assetKey(item) })), cursor, nextCursor: data.nextCursor || null, totalCount: data.totalCount ?? null };
+      if (reset) { setWalletPages([page]); setPageIndex(0); }
+      else { setWalletPages((pages) => [...pages, page]); setPageIndex((index) => index + 1); }
+    } catch (cause) {
+      if (requestId === request.current) setError(cause instanceof Error ? cause.message : "Unable to load wallet NFTs.");
+    } finally {
+      if (requestId === request.current) setLoading(false);
+    }
+  }, [chain.id, wallet]);
+
+  useEffect(() => {
+    setSelected([]);
+    setCollection("all");
+    setWalletPages([]);
+    setPageIndex(0);
+    if (!wallet) { setError(""); return; }
+    loadWalletPage(null, true);
+  }, [chain.id, refreshNonce, wallet, loadWalletPage]);
+
+  function nextAssetPage() {
+    if (walletPages[pageIndex + 1]) { setPageIndex(pageIndex + 1); return; }
+    if (currentPage?.nextCursor) loadWalletPage(currentPage.nextCursor);
+  }
 
   const assets = wallet ? walletAssets : demoAssets;
   const collections = useMemo(() => [...new Set(assets.map((asset) => asset.collection || "Uncategorised"))], [assets]);
@@ -147,7 +168,8 @@ export default function NftStaking({ chain, wallet, onConnectWallet }: { chain: 
         <div className="stake-panel-head"><div><span>01 · SELECT ASSETS</span><h2>NFTs in your wallet</h2><p>Only collections registered with an active MintForge staking pool will be eligible on-chain.</p></div>{wallet ? <button onClick={() => setRefreshNonce((current) => current + 1)}>Refresh wallet</button> : <button className="connect-inline" onClick={onConnectWallet}>Connect wallet</button>}</div>
         <div className="stake-filters"><label><span>COLLECTION</span><select value={collection} onChange={(event) => setCollection(event.target.value)}><option value="all">All collections</option>{collections.map((name) => <option key={name} value={name}>{name}</option>)}</select></label><div><span>DISPLAY</span><b>{wallet ? `${visibleAssets.length} wallet NFTs` : "Demo assets"}</b></div><small><i /> Eligible pool check</small></div>
 
-        {loading ? <div className="stake-loading"><i /><b>Scanning wallet NFTs…</b><p>Checking owned assets on {chain.name}.</p></div> : error ? <div className="stake-empty"><span>!</span><h3>Wallet scan unavailable</h3><p>{error}</p><button onClick={() => setRefreshNonce((current) => current + 1)}>Try again</button></div> : visibleAssets.length ? <div className="stake-nft-grid">
+        {loading ? <div className="stake-loading"><i /><b>Scanning wallet NFTs…</b><p>Checking owned assets on {chain.name}.</p></div> : error ? <div className="stake-empty"><span>!</span><h3>Wallet scan unavailable</h3><p>{error}</p><button onClick={() => setRefreshNonce((current) => current + 1)}>Try again</button></div> : visibleAssets.length ? <>
+          <div className="stake-nft-grid">
           {visibleAssets.map((asset) => {
             const checked = selected.includes(asset.key);
             return <button type="button" key={asset.key} className={checked ? "stake-nft selected" : "stake-nft"} onClick={() => toggleAsset(asset.key)} aria-pressed={checked}>
@@ -155,7 +177,15 @@ export default function NftStaking({ chain, wallet, onConnectWallet }: { chain: 
               <div className="stake-asset-copy"><span>{asset.collection || asset.symbol || "NFT COLLECTION"}</span><b>{asset.name}</b><small>{asset.standard} · #{asset.tokenId}</small></div>
             </button>;
           })}
-        </div> : <div className="stake-empty"><span>∅</span><h3>No wallet NFTs found</h3><p>Your wallet does not currently expose any NFTs through the {chain.name} gallery index.</p></div>}
+          </div>
+          {wallet && (
+            <div className="gallery-pagination">
+              <button type="button" onClick={() => setPageIndex(Math.max(0, pageIndex - 1))} disabled={pageIndex === 0}>← Previous 12</button>
+              <span><b>{pageIndex + 1}</b><i />{pageTotal !== null ? Math.min((pageIndex + 1) * 12, pageTotal) + " of " + pageTotal : "12 per batch"}</span>
+              <button type="button" onClick={nextAssetPage} disabled={!currentPage?.nextCursor && !walletPages[pageIndex + 1]}>Next 12 →</button>
+            </div>
+          )}
+        </> : <div className="stake-empty"><span>∅</span><h3>No wallet NFTs found</h3><p>Your wallet does not currently expose any NFTs through the {chain.name} gallery index.</p></div>}
       </section>
 
       <aside className="stake-config-panel">
