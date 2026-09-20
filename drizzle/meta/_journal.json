@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1789891396258,
+      "tag": "0000_peaceful_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789897728817,
+      "tag": "0001_storage_quotes",
+      "breakpoints": true
+    }
+  ]
+}
