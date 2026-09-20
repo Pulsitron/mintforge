@@ -9,7 +9,7 @@ test("all MintForge feature URLs render directly with development preview metada
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
-  for (const route of ["/", "/create", "/collections/upload", "/viewer", "/staking", "/dashboard", "/marketplace", "/guide"]) {
+  for (const route of ["/", "/create", "/collections/upload", "/viewer", "/staking", "/dashboard", "/marketplace", "/guide", "/setup"]) {
   const response = await worker.fetch(
     new Request("http://localhost" + route, {
       headers: { accept: "text/html" },

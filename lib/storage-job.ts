@@ -2,6 +2,7 @@ import { signer } from "./web3";
 import { pool } from "./collection-files";
 import { batchBound, groupFiles, type StorageQuote } from "./storage-types";
 import { manifest, signedBundle, signedData, uploadIdentity, IRYS_TAGS, type UploadPart } from "./irys-data";
+import type { SettlementProgress } from "./pls-types";
 
 type Job = {key: string; address: string; quote?: StorageQuote; payment?: string; active?: boolean; base?: string};
 type Batch = {id: string; ids: Record<string,string>; chunk?: string};
@@ -63,15 +64,101 @@ async function api<T>(path: string, body: unknown) {
   return data as T;
 }
 export async function quoteStorage(plan: StoragePlan) {
-  if (plan.job.quote && (plan.job.payment || plan.job.quote.expires > Date.now() + 60000)) return plan.job.quote;
+  if (plan.job.quote && (plan.job.quote.automation || plan.job.payment || plan.job.quote.expires > Date.now() + 60000)) return plan.job.quote;
   plan.job.quote = await api<StorageQuote>("/api/storage-quote",{job:plan.id,address:plan.job.address,sizes:plan.bounds,count:plan.count});
   await checkpoint(plan.id,plan.job);
   return plan.job.quote;
 }
-export async function payStorage(plan: StoragePlan, wallet: string, progress: (s:string)=>void) {
+const paymentsInFlight = new Map<string, Promise<void>>();
+async function paymentLock<T>(plan: StoragePlan, run:()=>Promise<T>):Promise<T> {
+  if(typeof navigator!=="undefined"&&navigator.locks)return await navigator.locks.request(`mintforge-payment:${plan.id}`,{ifAvailable:true},lock=>{
+    if(!lock)throw new Error("This collection is already processing in another tab. Continue there without paying again.");
+    return run();
+  });
+  if(plan.job.quote?.automation&&typeof window!=="undefined")return Promise.reject(new Error("This browser cannot safely coordinate collection payments. Use a current browser over HTTPS."));
+  return run();
+}
+export async function resetStorageQuote(plan: StoragePlan) {
+  if(paymentsInFlight.has(plan.id))throw new Error("This payment is still processing.");
+  await paymentLock(plan,async()=>{
+    const saved=await checkpoint<Job>(plan.id);
+    if(saved?.quote&&saved.quote.id!==plan.job.quote?.id)throw new Error("The quote changed in another tab. Reload this collection before continuing.");
+    if(saved?.payment)Object.assign(plan.job,saved);
+    if(plan.job.quote?.automation){
+      const status=await api<SettlementProgress>("/api/storage-progress",{id:plan.job.quote.id,...(plan.job.payment?{payment:plan.job.payment}:{})});
+      const hasPayment=!!plan.job.payment||status.transactions.some(t=>t.step==="payment");
+      if(status.active||(hasPayment&&status.stage!=="refunded"))throw new Error("Keep the existing payment job until processing or recovery finishes. Do not pay again.");
+      if(hasPayment)await checkpoint(`payment-history:${plan.job.quote.id}`,{quote:plan.job.quote,payment:plan.job.payment,settlement:status});
+    }else if(plan.job.payment)throw new Error("This collection already has a storage payment.");
+    delete plan.job.quote;delete plan.job.payment;delete plan.job.active;
+    await checkpoint(plan.id,plan.job);
+  });
+}
+export function payStorage(plan: StoragePlan, wallet: string, progress: (s:string)=>void, onSettlement?: (s: SettlementProgress) => void, signal?: AbortSignal) {
+  const existing = paymentsInFlight.get(plan.id);
+  if (existing) return existing;
+  const run=async()=>{
+    // Another tab may have paid since this tab restored its IndexedDB draft.
+    const saved=await checkpoint<Job>(plan.id);
+    if(saved?.quote&&saved.quote.id!==plan.job.quote?.id)throw new Error("The quote changed in another tab. Reload this collection before continuing.");
+    if(saved?.payment&&saved.quote?.id===plan.job.quote?.id)Object.assign(plan.job,saved);
+    return payStorageOnce(plan,wallet,progress,onSettlement,signal);
+  };
+  const payment = paymentLock(plan,run).finally(()=>paymentsInFlight.delete(plan.id));
+  paymentsInFlight.set(plan.id,payment);
+  return payment;
+}
+export async function inspectStoragePayment(plan: StoragePlan) {
+  if (!plan.job.quote || !plan.job.payment) throw new Error("No saved payment is available.");
+  return api<SettlementProgress>("/api/storage-progress",{id:plan.job.quote.id,payment:plan.job.payment});
+}
+export async function recoverStoragePayment(plan: StoragePlan, payment: string) {
+  if (!plan.job.quote?.automation || !/^0x[a-fA-F0-9]{64}$/.test(payment)) throw new Error("Enter the PLS payment hash from your wallet activity.");
+  const status = await api<SettlementProgress>("/api/storage-progress",{id:plan.job.quote.id,payment});
+  plan.job.payment = payment; plan.job.active = status.active;
+  await checkpoint(plan.id,plan.job);
+  return status;
+}
+async function payStorageOnce(plan: StoragePlan, wallet: string, progress: (s:string)=>void, onSettlement?: (s: SettlementProgress) => void, signal?: AbortSignal) {
   const q = plan.job.quote;
   if (!q) throw new Error("Review the storage quote first.");
   if (plan.job.active) return;
+  if (q.automation) {
+    if (!plan.job.payment) {
+      if (q.expires < Date.now() + 60000) throw new Error("Quote expires too soon. Request a new quote before paying.");
+      progress("Review the complete PLS payment in your wallet. Conversion and storage funding follow automatically.");
+      const s = await signer(q.paymentChain,wallet);
+      const tx = await s.sendTransaction({to:q.recipient,value:BigInt(q.total),data:q.data});
+      plan.job.payment = tx.hash;
+      await checkpoint(plan.id,plan.job);
+    }
+    const until = Date.now() + 5 * 60000;
+    let registered=false;
+    do {
+      signal?.throwIfAborted();
+      let status: SettlementProgress|undefined;
+      try {status=await inspectStoragePayment(plan);registered=true;}
+      catch {
+        progress(registered?"Payment progress is temporarily unavailable. The saved job continues processing.":"Saving your payment with MintForge. Keep this page open; your transaction hash is saved in this browser.");
+      }
+      if(status){
+        onSettlement?.(status);
+        progress(status.error || status.message);
+        if (status.active) {
+          plan.job.active = true;
+          await checkpoint(plan.id,plan.job);
+          return;
+        }
+        if (["refunded","needs_attention"].includes(status.stage)) throw new Error(status.message);
+      }
+      await new Promise<void>((resolve,reject)=>{
+        const stop = () => { clearTimeout(timer); reject(new Error(registered?"Payment monitoring paused. Processing continues automatically; resume with the same files.":"Your payment hash is saved in this browser but MintForge has not acknowledged it yet. Resume with the same files to register this payment; do not pay again.")); };
+        const timer = setTimeout(()=>{signal?.removeEventListener("abort",stop);resolve();},6000);
+        signal?.addEventListener("abort",stop,{once:true});
+      });
+    } while (Date.now() < until);
+    throw new Error(registered?"Your payment is saved and processing continues automatically. Continue with the same files later to upload without paying again.":"Your payment hash is saved in this browser but MintForge has not acknowledged it yet. Resume with the same files or recover the payment hash; do not pay again.");
+  }
   if (!plan.job.payment) {
     if (q.expires < Date.now() + 60000) throw new Error("Quote expires too soon. Request a new quote before paying.");
     progress("Review the quoted storage payment in your wallet.");

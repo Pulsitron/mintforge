@@ -9,7 +9,9 @@ export function irysSettings() {
   const gateway = (s.IRYS_GATEWAY_URL || "https://gateway.irys.xyz").replace(/\/$/, "");
   for (const url of [endpoint, gateway]) if (new URL(url).protocol !== "https:" || url.length > 256) throw new Error("Storage endpoints require HTTPS.");
   const key = s.IRYS_PRIVATE_KEY;
-  const payer = new Wallet(key).address.toLowerCase();
+  let payer: string;
+  try { payer = new Wallet(key).address.toLowerCase(); }
+  catch { throw new Error("The Irys treasury secret is not a valid wallet private key. Check it in Cloudflare; never paste it into this website or chat."); }
   const service = BigInt(s.STORAGE_SERVICE_FEE_WEI || "0");
   if (service < 0n) throw new Error("Storage service fee is invalid.");
   const maxBytes = Number(s.COLLECTION_MAX_BYTES || 214748364800);
@@ -22,9 +24,9 @@ export async function irysGet(path: string) {
   if (!response.ok) throw new Error(`Irys is unavailable (${response.status}). No payment is requested.`);
   return response.json();
 }
-export async function irysPrice(bytes: number) {
+export async function irysPrice(bytes: number, payer?: string) {
   const c = irysSettings();
-  const value = await irysGet(`/price/${c.token}/${bytes}?address=${c.payer}`);
+  const value = await irysGet(`/price/${c.token}/${bytes}?address=${payer || c.payer}`);
   if (!/^\d+$/.test(String(value))) throw new Error("Irys returned an invalid price.");
   return BigInt(String(value));
 }

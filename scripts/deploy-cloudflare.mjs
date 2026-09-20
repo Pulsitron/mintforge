@@ -25,6 +25,7 @@ config.d1_databases = [
   },
 ];
 config.keep_vars = true;
+config.triggers = { ...config.triggers, crons: ["* * * * *"] };
 fs.mkdirSync(".wrangler", { recursive: true });
 const filename = path.join(root, ".wrangler/mintforge-deploy.json");
 fs.writeFileSync(filename, JSON.stringify(config, null, 2));

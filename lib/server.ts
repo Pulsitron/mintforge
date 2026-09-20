@@ -13,6 +13,15 @@ export function settings() {
     COLLECTION_MAX_BYTES?: string;
     UPLOAD_MAX_BYTES_PER_DAY?: string;
     UPLOAD_ALLOWED_WALLETS?: string;
+    PLS_CHECKOUT_ENABLED?: string;
+    PLS_RPC_URL?: string;
+    PLS_SWAP_ROUTER?: string;
+    PLS_SWAP_ROUTER_HASH?: string;
+    PLS_WRAPPED_NATIVE?: string;
+    PLS_BRIDGE_WETH?: string;
+    LIBERTY_ROUTER?: string;
+    LIBERTY_ROUTER_HASH?: string;
+    PLS_SLIPPAGE_BPS?: string;
   };
 }
 export function database() {
@@ -63,7 +72,7 @@ export function authMessage(
 }
 export function jsonError(e: unknown, status = 400) {
   return Response.json(
-    { error: e instanceof Error ? e.message : "Request failed." },
+    { error: e instanceof Error && !("code" in e) ? e.message : "Request failed. Progress is saved; retry without paying again." },
     { status, headers: { "Cache-Control": "no-store" } },
   );
 }
