@@ -26,7 +26,9 @@ import {
   reader,
 } from "../lib/web3";
 import { authorizeUploads } from "../lib/uploads";
-import { prepareStorage, quoteStorage, payStorage, runStorage, type StoragePlan } from "../lib/storage-job";
+import { prepareStorage, quoteStorage, payStorage, resetStorageQuote, runStorage, type StoragePlan } from "../lib/storage-job";
+import StorageQuotePanel from "./StorageQuotePanel";
+import type { SettlementProgress } from "../lib/pls-types";
 import type { StorageQuote } from "../lib/storage-types";
 import type { Metadata } from "../lib/collection-files";
 import TransactionNotice from "./TransactionNotice";
@@ -106,14 +108,29 @@ export default function LaunchCollection({
   const [storageGas, setStorageGas] = useState("");
   const [riskAccepted, setRiskAccepted] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [settlement, setSettlement] = useState<SettlementProgress | null>(null);
+  const inFlight = useRef(false);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => { setPlan(null); setQuote(null); setGasEstimate(""); }, [draft,items,artwork,placeholder,banner,chain.id,wallet]);
   useEffect(() => () => abort.current?.abort(), []);
+  async function refreshQuote() {
+    if(!plan||inFlight.current)return;
+    inFlight.current=true;setBusy(true);
+    try{
+      await authorizeUploads(chain.id,wallet);
+      await resetStorageQuote(plan);
+      setQuote(null);setSettlement(null);setStorageGas("");
+      setMessage("Request a fresh quote before continuing.");
+    }catch(e){setMessage(errorText(e));}
+    finally{inFlight.current=false;setBusy(false);}
+  }
   async function launch() {
+    if (inFlight.current) return;
     if (!wallet) {
       onConnect();
       return;
     }
+    inFlight.current = true;
     setBusy(true);
     abort.current = new AbortController();
     setMessage("Checking collection settings…");
@@ -344,17 +361,19 @@ export default function LaunchCollection({
         setMessage("Authorize the storage quote in your wallet. This signature does not spend funds.");
         await authorizeUploads(chain.id,wallet);
         const quoted = await quoteStorage(prepared);
-        const paymentReader = reader(quoted.paymentChain);
-        const [paymentGas,paymentFees] = await Promise.all([
-          paymentReader.estimateGas({from:wallet,to:quoted.recipient,value:BigInt(quoted.total),data:quoted.data}),paymentReader.getFeeData(),
-        ]);
-        setStorageGas(formatEther(paymentGas * (paymentFees.maxFeePerGas || paymentFees.gasPrice || 0n)));
+        if(!prepared.job.payment){
+          const paymentReader = reader(quoted.paymentChain);
+          const [paymentGas,paymentFees] = await Promise.all([
+            paymentReader.estimateGas({from:wallet,to:quoted.recipient,value:BigInt(quoted.total),data:quoted.data}),paymentReader.getFeeData(),
+          ]);
+          setStorageGas(formatEther(paymentGas * (paymentFees.maxFeePerGas || paymentFees.gasPrice || 0n)));
+        }else setStorageGas("");
         setQuote(quoted);
         setMessage(prepared.job.payment ? "Found your saved storage payment. Continue to resume without paying again." : "Review the itemized storage quote and estimated network fees, then continue.");
         return;
       }
       await authorizeUploads(chain.id,wallet);
-      await payStorage(prepared,wallet,setMessage);
+      await payStorage(prepared,wallet,setMessage,setSettlement,abort.current!.signal);
       setUploading(true);
       const base = await runStorage(prepared,setMessage,abort.current!.signal);
       setUploading(false);
@@ -423,6 +442,7 @@ export default function LaunchCollection({
     } catch (e) {
       setMessage(abort.current?.signal.aborted ? "Upload paused. Progress is saved. Reselect the same files and metadata after reopening to resume." : errorText(e));
     } finally {
+      inFlight.current = false;
       setUploading(false);
       setBusy(false);
     }
@@ -459,18 +479,9 @@ export default function LaunchCollection({
         </p>
       )}
       {draft.standard === "ERC-404" && <label className="mf-warning"><input type="checkbox" checked={riskAccepted} onChange={e=>setRiskAccepted(e.target.checked)} /> I understand ERC-404 is experimental: fractional transfers may bank or restore NFT IDs, and wallet/indexer support varies.</label>}
-      {quote && <section className="settings-card" aria-label="Collection quote"><h4>Collection quote · Irys</h4><dl className="mf-details">
-        <div><dt>Storage budget, including metadata and manifest</dt><dd>{formatEther(BigInt(quote.storage))} ETH</dd></div>
-        <div><dt>Price / recovery reserve (10%)</dt><dd>{formatEther(BigInt(quote.reserve))} ETH</dd></div>
-        <div><dt>Upload approval</dt><dd>{formatEther(BigInt(quote.approvalCost))} ETH</dd></div>
-        <div><dt>Service and treasury funding allowance</dt><dd>{formatEther(BigInt(quote.service))} ETH</dd></div>
-        <div><dt>Storage checkout total</dt><dd>{formatEther(BigInt(quote.total))} ETH</dd></div>
-        <div><dt>Storage payment gas estimate</dt><dd>{storageGas || "—"} ETH</dd></div>
-        <div><dt>Collection deployment gas estimate</dt><dd>{gasEstimate || "—"} {chain.native}</dd></div>
-      </dl><p className="field-hint">Storage checkout uses {quote.paymentChain === "0x1" ? "Ethereum" : "Base"}. Quote expires {new Date(quote.expires).toLocaleTimeString()}. Storage allowance is capped and valid for 30 days; unused allowance remains with this upload job until expiry and is not automatically refunded. Network gas is variable and confirmed by your wallet. Optional staking pool creation and reward funding are separate transactions. This creates Irys URLs; an IPFS copy is not included.</p>
-        {plan?.job.payment && <p className="field-hint">Saved storage payment: {plan.job.payment}</p>}
-        {!busy && !plan?.job.payment && <button type="button" className="secondary-action" onClick={()=>{if(plan) plan.job.quote=undefined;setQuote(null);setMessage("Request a fresh quote before continuing.");}}>Refresh unpaid quote</button>}
-      </section>}
+      {quote && <StorageQuotePanel quote={quote} plan={plan} settlement={settlement} onSettlement={setSettlement} busy={busy} wallet={wallet} storageGas={storageGas} mintGas={gasEstimate} native={chain.native}
+        refresh={refreshQuote} />}
+      {busy && quote?.automation && !uploading && <button type="button" className="secondary-action" onClick={()=>abort.current?.abort()}>Pause payment monitoring</button>}
       {uploading && <button type="button" className="secondary-action" onClick={()=>abort.current?.abort()}>Pause uploads</button>}
       <button
         className="launch-button"

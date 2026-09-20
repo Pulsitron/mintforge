@@ -5,6 +5,7 @@ import { database, jsonError, sameOrigin, uploadSession } from "../../../lib/ser
 import { irysSettings } from "../../../lib/irys-server";
 import { signedData } from "../../../lib/irys-data";
 import type { StorageQuote } from "../../../lib/storage-types";
+import { advanceSettlement, registerPlsPayment, settlementProgress } from "../../../lib/pls-settlement";
 export async function POST(req: Request) {
   try {
     sameOrigin(req); const session = await uploadSession(req), c = irysSettings();
@@ -14,6 +15,12 @@ export async function POST(req: Request) {
     const row = await db.prepare("SELECT * FROM storage_quotes WHERE id=? AND wallet=?").bind(id,session.wallet).first<{quote:string;payment_tx:string|null;active:number;approval_raw:string|null;approval_id:string|null}>();
     if (!row) throw new Error("Quote not found for this wallet.");
     const q = JSON.parse(row.quote) as StorageQuote;
+    if (q.automation) {
+      await registerPlsPayment(id,session.wallet,payment);
+      await advanceSettlement(id);
+      const status = await settlementProgress(id,session.wallet);
+      return Response.json({ok:status.active,...status},{headers:{"Cache-Control":"no-store"}});
+    }
     if (q.endpoint !== c.endpoint || q.token !== c.token || q.payer.toLowerCase() !== c.payer.toLowerCase()) throw new Error("Storage configuration changed. Contact the operator with your quote ID.");
     if (row.payment_tx && row.payment_tx !== payment.toLowerCase()) throw new Error("This quote already has a different payment.");
     if (row.active) return Response.json({ok:true},{headers:{"Cache-Control":"no-store"}});

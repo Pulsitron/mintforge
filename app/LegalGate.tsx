@@ -9,13 +9,13 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const TERMS_VERSION = "draft-0.2";
+const TERMS_VERSION = "draft-0.3";
 const STORAGE_KEY = "mintforge-tos-accepted";
 
 const TERMS_SECTIONS = [
   {
     heading: "1. What MintForge Is",
-    body: "MintForge is a technical and administrative platform that helps creators configure, and helps holders view and manage, non-fungible tokens (\"NFTs\") across supported blockchain networks. MintForge is not a broker, financial institution, custodian, or creditor. MintForge is not a party to any mint, sale, offer, staking arrangement, or other transaction between users. All transactions occur directly on-chain between the wallets involved.",
+    body: "MintForge provides tools to create, view, trade and stake non-fungible tokens (\"NFTs\") across supported blockchain networks. NFT minting, trading and staking use blockchain contracts. Automated storage checkout uses payment wallets controlled by MintForge's server to convert the reviewed payment and fund third-party storage. Review the payment route, costs and refund policy before approving a storage payment.",
   },
   {
     heading: "2. Eligibility & Sanctions Representation",
@@ -35,7 +35,7 @@ const TERMS_SECTIONS = [
   },
   {
     heading: "6. Wallet and Smart-Contract Custody",
-    body: "You retain control of your wallet and private keys. Staking transfers NFTs to the staking contract until you withdraw them; marketplace offers escrow the offered funds in the marketplace contract. Sale proceeds and rewards remain in their respective contracts until withdrawn. MintForge cannot reverse confirmed blockchain transactions or recover lost keys. Review each contract and wallet request before approving it.",
+    body: "You retain control of your personal wallet and private keys. Staking transfers NFTs to the staking contract until you withdraw them; marketplace offers escrow funds in the marketplace contract. Automated PLS storage payments enter an isolated wallet controlled by MintForge's server, which converts PLS through PulseX and LibertySwap and funds Irys. Unused conversion and gas funds are returned where their value covers the transfer cost; refunds may be PLS, WETH on PulseChain or ETH on the funding network. Unused Irys credit is not automatically refunded. Provider delays can pause settlement and some failures require recovery. MintForge cannot reverse confirmed blockchain transactions or recover lost keys.",
   },
   {
     heading: "7. Marketplace & Royalty Disclaimer",

@@ -10,6 +10,7 @@ import {
   signer,
 } from "../../lib/web3";
 import TransactionNotice from "../TransactionNotice";
+import StorageSetup from "../StorageSetup";
 const order: ContractName[] = [
   "MintForge721",
   "MintForge1155",
@@ -26,14 +27,7 @@ export default function Setup() {
     [addresses, setAddresses] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
-    [hash, setHash] = useState(""),
-    [uploads, setUploads] = useState<boolean | null>(null);
-  useEffect(() => {
-    fetch("/api/status")
-      .then((r) => r.json() as Promise<{ uploads: boolean }>)
-      .then((s) => setUploads(s.uploads))
-      .catch(() => setUploads(false));
-  }, []);
+    [hash, setHash] = useState("");
   useEffect(() => {
     setAddresses({});
     setMessage("");
@@ -245,27 +239,7 @@ export default function Setup() {
           supported networks.
         </p>
       </section>
-      <section className="settings-card">
-        <h2>3. Enable Irys uploads and quotes</h2>
-        <p>
-          {uploads === null
-            ? "Checking storage…"
-            : uploads
-              ? "Irys credentials and the upload database are present. Live pricing and treasury balance are checked at checkout."
-              : "Irys uploads are not configured yet."}
-        </p>
-        <p>
-          Add a <code>DB</code> Cloudflare D1 binding, apply the supplied
-          migrations, and set <code>IRYS_PRIVATE_KEY</code> as a server secret for a dedicated, funded Irys upload treasury.
-          Set <code>STORAGE_PAYMENT_RECEIVER</code>, <code>IRYS_TOKEN</code> (ethereum or base-eth) and your storage service fee.
-          See the included setup guide for the full configuration. Never enter a wallet recovery phrase or treasury key into this page.
-        </p>
-        <p>
-          Creators review an itemized storage budget before paying. The browser uploads directly to Irys using a spending approval capped to that job.
-          Fund the Irys account before enabling checkout; payment receipts do not automatically replenish its balance.
-        </p>
-        <a href="/">Return to MintForge →</a>
-      </section>
+      <StorageSetup />
     </main>
   );
 }

@@ -1,8 +1,9 @@
 import { isAddress, hexlify, randomBytes } from "ethers";
 import { boundedJson } from "../../../lib/http";
-import { database, digest, jsonError, quota, sameOrigin, uploadSession } from "../../../lib/server";
+import { database, digest, jsonError, quota, sameOrigin, uploadSession, settings } from "../../../lib/server";
 import { irysGet, irysPrice, irysSettings } from "../../../lib/irys-server";
 import type { StorageQuote } from "../../../lib/storage-types";
+import { jobSigner, makePlsQuote } from "../../../lib/liberty-storage";
 export async function POST(req: Request) {
   try {
     sameOrigin(req);
@@ -14,19 +15,25 @@ export async function POST(req: Request) {
     const hour = Math.floor(Date.now() / 3600000);
     await quota(`quotes:${hour}:${session.wallet}`, 1, 30);
     await quota(`quotes-ip:${hour}:${await digest(req.headers.get("cf-connecting-ip") || "local")}`, 1, 60);
+    const automatic = settings().PLS_CHECKOUT_ENABLED === "true";
+    const id = hexlify(randomBytes(32));
+    const payer = automatic ? jobSigner(id, c.key).address : c.payer;
     // Power-of-two price bands bound provider requests to <=18, even for 10,000 files.
     const bands = sizes.map(n => Math.max(1024, 2 ** Math.ceil(Math.log2(n))));
     const prices = new Map<number, bigint>();
-    for (const size of new Set(bands)) prices.set(size, await irysPrice(size));
+    for (const size of new Set(bands)) prices.set(size, await irysPrice(size, payer));
     const storage = bands.reduce((sum, n) => sum + prices.get(n)!, 0n);
     const reserve = (storage + 9n) / 10n;
-    const approvalCost = await irysPrice(4096);
+    const approvalCost = await irysPrice(4096, payer);
     const allowance = storage + reserve;
-    const balance = await irysGet(`/account/balance/${c.token}?address=${c.payer}`) as {balance?: string};
-    if (!balance?.balance || BigInt(balance.balance) < allowance + approvalCost) throw new Error("The Irys treasury needs funding before checkout can open.");
-    const id = hexlify(randomBytes(32));
-    const quote: StorageQuote = {id, job, address, provider:"irys", endpoint:c.endpoint, gateway:c.gateway, token:c.token, paymentChain:c.paymentChain, symbol:"ETH", recipient:c.recipient, data:id, storage:String(storage), reserve:String(reserve), service:String(c.service), approvalCost:String(approvalCost), total:String(allowance + approvalCost + c.service), allowance:String(allowance), payer:c.payer, expires:Date.now() + 15 * 60000, approvalSeconds:30 * 86400};
+    if (!automatic) {
+      const balance = await irysGet(`/account/balance/${c.token}?address=${c.payer}`) as {balance?: string};
+      if (!balance?.balance || BigInt(balance.balance) < allowance + approvalCost) throw new Error("The Irys treasury needs funding before checkout can open.");
+    }
+    let quote: StorageQuote = {id, job, address, provider:"irys", endpoint:c.endpoint, gateway:c.gateway, token:c.token, paymentChain:c.paymentChain, symbol:"ETH", recipient:c.recipient, data:id, storage:String(storage), reserve:String(reserve), service:String(c.service), approvalCost:String(approvalCost), total:String(allowance + approvalCost + c.service), allowance:String(allowance), payer, expires:Date.now() + 15 * 60000, approvalSeconds:30 * 86400};
+    if (automatic) quote = await makePlsQuote(quote, session.wallet);
     await database().prepare("INSERT INTO storage_quotes(id,wallet,job,upload_address,quote,expires) VALUES(?,?,?,?,?,?)").bind(id,session.wallet,job,address.toLowerCase(),JSON.stringify(quote),quote.expires).run();
+    if (automatic) await database().prepare("INSERT INTO storage_settlements(quote_id,updated) VALUES(?,?)").bind(id,Date.now()).run();
     return Response.json(quote,{headers:{"Cache-Control":"no-store"}});
   } catch (e) { return jsonError(e); }
 }
