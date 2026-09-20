@@ -2,8 +2,24 @@ import vinext from "vinext";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { createRequire } from "node:module";
-import hostingConfig from "./.openai/hosting.json";
+import { readFileSync } from "node:fs";
 import { sites } from "./build/sites-vite-plugin";
+
+// Sites metadata is optional when deploying directly to Cloudflare. Read it at
+// runtime so Vite's config bundler does not require a missing JSON import.
+// The deploy helper supplies the real database ID; local builds use DB by default.
+let hostingConfig: { d1?: string | null; r2?: string | null } = {
+  d1: "DB",
+  r2: null,
+};
+try {
+  hostingConfig = JSON.parse(
+    readFileSync(new URL("./.openai/hosting.json", import.meta.url), "utf8"),
+  );
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
+
 // Scope SDK compatibility modules to the browser. Never alias Node built-ins in
 // Cloudflare's server module runner.
 const require = createRequire(import.meta.url);
