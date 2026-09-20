@@ -8,6 +8,10 @@ export async function POST(req: Request) {
   try {
     sameOrigin(req);
     const session = await uploadSession(req), c = irysSettings();
+    // Recheck at quote creation: existing one-hour sessions must not bypass a
+    // newly restricted acceptance test. Already-paid jobs can still settle.
+    const allowed = settings().UPLOAD_ALLOWED_WALLETS?.split(",").map(wallet => wallet.trim().toLowerCase()).filter(Boolean);
+    if (allowed?.length && !allowed.includes(session.wallet.toLowerCase())) throw new Error("This wallet is not enabled for uploads.");
     const body = await boundedJson(req, 256 * 1024);
     const {job, address, sizes, count} = body;
     if (typeof job !== "string" || !/^[a-f0-9]{64}$/.test(job) || typeof address !== "string" || !isAddress(address) || !Number.isInteger(count) || Number(count) < 1 || Number(count) > 10000 || !Array.isArray(sizes) || !sizes.length || sizes.length > 20010 || sizes.some(n => !Number.isSafeInteger(n) || n < 1 || n > 96 * 1024 * 1024)) throw new Error("Invalid collection upload plan.");
